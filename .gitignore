@@ -1,0 +1,98 @@
+    # Byte-compiled / optimized / DLL files
+    __pycache__/
+    *.pyc
+    *.pyo
+    *.pyd
+
+    # C extensions
+    *.so
+
+    # Distribution / packaging
+    .Python
+    build/
+    develop-eggs/
+    dist/
+    downloads/
+    eggs/
+    .eggs/
+    lib/
+    lib64/
+    parts/
+    sdist/
+    var/
+    wheels/
+    pip-wheel-metadata/
+    share/python-wheels/
+    *.egg-info/
+    .installed.cfg
+    *.egg
+    MANIFEST
+
+    # PyInstaller
+    # Usually these files are created by pyinstaller, if you are using
+    # graphical interfaces from other libraries (like PyQT)
+    *.spec
+
+    # Installer logs
+    pip-log.txt
+    pip-delete-this-directory.txt
+
+    # Unit test / coverage reports
+    htmlcov/
+    .tox/
+    .nox/
+    .coverage
+    .coverage.*
+    .cache
+    nosetests.xml
+    coverage.xml
+    *.cover
+    *.py,cover
+    .hypothesis/
+    .pytest_cache/
+
+    # Environments
+    .env
+    .venv/
+    env/
+    venv/
+    ENV/
+    env.bak/
+    venv.bak/
+    model_env/ # Thêm thư mục môi trường ảo của bạn
+
+    # Spyder project settings
+    .spyderproject
+    .spyproject
+
+    # Rope project settings
+    .ropeproject
+
+    # mkdocs documentation
+    /site
+
+    # mypy
+    .mypy_cache/
+    .dmypy.json
+    dmypy.json
+
+    # Jupyter Notebook
+    .ipynb_checkpoints
+
+    # IDE settings folders
+    .idea/
+    .vscode/
+
+    # dotenv environment variables file
+    .env
+
+    # Temp files
+    *.log
+    local_settings.py
+
+    # Model files (can be large)
+    *.pt
+    *.pth
+    *.onnx
+    
+best_palmtree.pt

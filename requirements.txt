@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+ultralytics
+pillow
+python-dotenv
+pyngrok
+sahi
+opencv-python-headless
+numpy
+python-multipart
+Flask
+requests
+Pillow
+numpy
