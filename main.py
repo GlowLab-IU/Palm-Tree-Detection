@@ -37,6 +37,48 @@ GOOGLE_TILE_URL_TEMPLATE = "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}"
 MAX_TILES = 225
 
 # --- Hàm GIS & Vẽ ---
+def calculate_gsd(lat, zoom):
+    """
+    Tính Ground Sample Distance (GSD) - độ phân giải mặt đất (m/pixel)
+    Công thức Web Mercator standard:
+    GSD = 156543.03392 * cos(lat) / 2^zoom
+    
+    Args:
+        lat: Latitude (độ)
+        zoom: Zoom level
+    Returns:
+        GSD in meters/pixel
+    """
+    gsd = 156543.03392 * math.cos(math.radians(lat)) / (2 ** zoom)
+    return gsd
+
+def calculate_polygon_area_m2(polygon_latlng):
+    """
+    Tính diện tích polygon trên mặt cầu (m²) sử dụng công thức spherical excess
+    
+    Args:
+        polygon_latlng: List of dicts with 'latitude' and 'longitude' keys
+    Returns:
+        Area in square meters
+    """
+    EARTH_RADIUS = 6378137.0  # meters
+    
+    if len(polygon_latlng) < 3:
+        return 0.0
+    
+    # Convert to radians
+    coords = [(math.radians(p['latitude']), math.radians(p['longitude'])) for p in polygon_latlng]
+    
+    # Spherical excess formula
+    area = 0.0
+    n = len(coords)
+    for i in range(n):
+        j = (i + 1) % n
+        area += (coords[j][1] - coords[i][1]) * (2 + math.sin(coords[i][0]) + math.sin(coords[j][0]))
+    
+    area = abs(area * EARTH_RADIUS * EARTH_RADIUS / 2.0)
+    return area
+
 def latLngToWorldXY(lat, lng, zoom):
     # --- SỬA LỖI CÚ PHÁP: Bỏ comment JS ---
     siny = math.sin(math.radians(lat))
@@ -116,6 +158,22 @@ async def predict_from_polygon(data: PredictRequest = Body(...)):
         if len(polygon_latlng) < 3: raise HTTPException(status_code=400, detail="Invalid polygon")
         logging.info(f"Processing polygon with {len(polygon_latlng)} points.")
 
+        # 0. Tính toán GSD và diện tích polygon
+        # Lấy latitude trung tâm của polygon để tính GSD
+        avg_lat = sum(p["latitude"] for p in polygon_latlng) / len(polygon_latlng)
+        gsd = calculate_gsd(avg_lat, TARGET_ZOOM)
+        logging.info(f"GSD at lat {avg_lat:.6f}, zoom {TARGET_ZOOM}: {gsd:.6f} m/pixel")
+        
+        # Tính diện tích polygon (nếu client không gửi)
+        if data.area_m2 is None:
+            area_m2 = calculate_polygon_area_m2(polygon_latlng)
+            area_ha = area_m2 / 10000.0
+            logging.info(f"Calculated polygon area: {area_m2:.2f} m² ({area_ha:.4f} ha)")
+        else:
+            area_m2 = data.area_m2
+            area_ha = data.area_ha if data.area_ha else area_m2 / 10000.0
+            logging.info(f"Client-provided polygon area: {area_m2:.2f} m² ({area_ha:.4f} ha)")
+
         # 1. Tính toán & Tải Tile
         tileBounds = getTileBoundingBox(polygon_latlng, TARGET_ZOOM)
         minTileX, maxTileX = tileBounds["minTileX"], tileBounds["maxTileX"]
@@ -173,21 +231,48 @@ async def predict_from_polygon(data: PredictRequest = Body(...)):
         ImageDraw.Draw(mask_pil).polygon(polygon_px, outline=1, fill=1)
         mask_np = np.array(mask_pil)
 
-        # 5. LỌC CÁC DỰ ĐOÁN NẰM TRONG POLYGON MASK
+        # 5. LỌC CÁC DỰ ĐOÁN NẰM TRONG POLYGON MASK & TÍNH TOÁN PHENOTYPING METRICS
         filtered_predictions = []
+        total_canopy_area = 0.0  # Acover - Tổng diện tích tán cây
+        
         for pred in all_predictions:
             box = pred.bbox
             center_x = int((box.minx + box.maxx) / 2)
             center_y = int((box.miny + box.maxy) / 2)
             if 0 <= center_y < mask_np.shape[0] and 0 <= center_x < mask_np.shape[1] and mask_np[center_y, center_x] > 0:
+                # Tính kích thước bounding box trong pixel
+                wp = box.maxx - box.minx  # Chiều rộng (pixel)
+                hp = box.maxy - box.miny  # Chiều cao (pixel)
+                
+                # Tính bán kính tán cây (meters)
+                # rm = ((wp + hp) / 4) * GSD
+                radius_m = ((wp + hp) / 4.0) * gsd
+                
+                # Tính diện tích tán cây (m²)
+                # Atree = π * rm²
+                canopy_area_m2 = math.pi * (radius_m ** 2)
+                total_canopy_area += canopy_area_m2
+                
                 filtered_predictions.append({
                     "class_id": pred.category.id,
                     "class_name": pred.category.name,
                     "confidence": round(float(pred.score.value), 4),
-                    "box_pixels_stitched": [int(box.minx), int(box.miny), int(box.maxx), int(box.maxy)]
+                    "box_pixels_stitched": [int(box.minx), int(box.miny), int(box.maxx), int(box.maxy)],
+                    "canopy_width_m": round(wp * gsd, 3),
+                    "canopy_height_m": round(hp * gsd, 3),
+                    "canopy_radius_m": round(radius_m, 3),
+                    "canopy_area_m2": round(canopy_area_m2, 3)
                 })
-        logging.info(f"✅ Filtered down to {len(filtered_predictions)} objects inside the polygon.")
+        
+        logging.info(f"Filtered down to {len(filtered_predictions)} objects inside the polygon.")
         predicted_count = len(filtered_predictions)
+        
+        # Tính mật độ tán cây (Cover Density)
+        # ρ = (Acover / Aplot) * 100
+        cover_density_percent = (total_canopy_area / area_m2 * 100.0) if area_m2 > 0 else 0.0
+        
+        logging.info(f"Total canopy area (Acover): {total_canopy_area:.2f} m²")
+        logging.info(f"Cover density (ρ): {cover_density_percent:.2f}%")
 
         # 6. Cắt ảnh gốc (RGBA) theo bounding box của polygon để gửi về client
         logging.info("Cropping original stitched image for client...")
@@ -228,11 +313,21 @@ async def predict_from_polygon(data: PredictRequest = Body(...)):
         overlay_image_base64 = base64.b64encode(buffer).decode("utf-8")
         logging.info("Overlay Base64 image created successfully.")
 
-        # 9. Trả kết quả về app (Thêm input_image_base64)
+        # 9. Trả kết quả về app (Bổ sung phenotyping metrics)
         return JSONResponse(content={
             "predicted_count": predicted_count,
             "input_image_base64": input_image_base64,
-            "overlay_image_base64": overlay_image_base64
+            "overlay_image_base64": overlay_image_base64,
+            "phenotyping_metrics": {
+                "gsd_m_per_pixel": round(gsd, 6),
+                "plot_area_m2": round(area_m2, 2),
+                "plot_area_ha": round(area_ha, 4),
+                "total_canopy_area_m2": round(total_canopy_area, 2),
+                "cover_density_percent": round(cover_density_percent, 2),
+                "avg_canopy_area_m2": round(total_canopy_area / predicted_count, 2) if predicted_count > 0 else 0.0,
+                "tree_density_per_ha": round(predicted_count / area_ha, 2) if area_ha > 0 else 0.0
+            },
+            "trees": filtered_predictions
         })
 
     except HTTPException as http_exc: raise http_exc
