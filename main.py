@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-FastAPI application logic for Palm Tree Counting API (Server-side Tile Processing + Filtering)
+FastAPI application logic for Palm Tree Counting API 
+Feature: Server-side Tile Processing + Spatial Analysis (Smart K-NN) + Agri-Intelligence + GPS Extraction
+Language: English Responses
 """
-# --- Imports (giữ nguyên) ---
 import io
 import os
 import logging
@@ -10,35 +11,62 @@ import numpy as np
 import cv2
 import torch
 import base64
-from datetime import datetime
 import math
 import requests
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw
 from io import BytesIO
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sahi import AutoDetectionModel
 from sahi.predict import get_sliced_prediction
-from pydantic import BaseModel, Field
-from typing import List, Dict
+from pydantic import BaseModel
+from typing import List
 
-# --- Cấu hình & Hằng số (giữ nguyên) ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger("PalmTreeAPI")
+
 MODEL_PATH = os.getenv("MODEL_PATH", "./best_palmtree.pt")
 SAHI_SLICE_HEIGHT = int(os.getenv("SAHI_SLICE_HEIGHT", 640))
 SAHI_SLICE_WIDTH = int(os.getenv("SAHI_SLICE_WIDTH", 640))
 SAHI_OVERLAP_HEIGHT_RATIO = float(os.getenv("SAHI_OVERLAP_HEIGHT_RATIO", 0.2))
 SAHI_OVERLAP_WIDTH_RATIO = float(os.getenv("SAHI_OVERLAP_WIDTH_RATIO", 0.2))
-SAHI_CONFIDENCE_THRESHOLD = float(os.getenv("SAHI_CONFIDENCE_THRESHOLD", 0.3))
+SAHI_CONFIDENCE_THRESHOLD = float(os.getenv("SAHI_CONFIDENCE_THRESHOLD", 0.35))
 TARGET_ZOOM = 20
 TILE_SIZE = 256
 GOOGLE_TILE_URL_TEMPLATE = "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}"
 MAX_TILES = 225
 
-# --- Hàm GIS & Vẽ ---
+AGRI_SPECS = {
+    "OPTIMAL_DENSITY_MIN": 100,
+    "OPTIMAL_DENSITY_MAX": 125,
+    "SPACING_SPARSE_THRESHOLD_M": 12.0,
+    "SPACING_CROWDED_THRESHOLD_M": 6.0,
+    "YIELD_AVG_PER_TREE_KG": 48.0,
+    "YIELD_HIGH_PER_TREE_KG": 85.0
+}
+
+
+def calculate_gsd(lat, zoom):
+    return 156543.03392 * math.cos(math.radians(lat)) / (2 ** zoom)
+
+def calculate_polygon_area_m2(polygon_latlng):
+    EARTH_RADIUS = 6378137.0
+    if len(polygon_latlng) < 3: return 0.0
+    coords = [(math.radians(p['latitude']), math.radians(p['longitude'])) for p in polygon_latlng]
+    area = 0.0
+    n = len(coords)
+    for i in range(n):
+        j = (i + 1) % n
+        area += (coords[j][1] - coords[i][1]) * (2 + math.sin(coords[i][0]) + math.sin(coords[j][0]))
+    return abs(area * EARTH_RADIUS * EARTH_RADIUS / 2.0)
+
 def latLngToWorldXY(lat, lng, zoom):
-    # --- SỬA LỖI CÚ PHÁP: Bỏ comment JS ---
     siny = math.sin(math.radians(lat))
     siny = min(max(siny, -0.9999), 0.9999)
     y = math.log((1 + siny) / (1 - siny))
@@ -46,8 +74,16 @@ def latLngToWorldXY(lat, lng, zoom):
     worldX = TILE_SIZE * (1 << zoom) * (lng / 360 + 0.5)
     return {"x": worldX, "y": worldY}
 
+def worldXYToLatLng(worldX, worldY, zoom):
+    """Chuyển đổi ngược từ World XY sang GPS LatLng"""
+    n = 1 << zoom
+    lng_deg = (worldX / (TILE_SIZE * n) - 0.5) * 360.0
+    y_norm = 0.5 - (worldY / (TILE_SIZE * n))
+    lat_rad = 2 * math.atan(math.exp(2 * math.pi * y_norm)) - math.pi / 2
+    lat_deg = math.degrees(lat_rad)
+    return {"latitude": lat_deg, "longitude": lng_deg}
+
 def getTileBoundingBox(points, zoom):
-    # --- SỬA LỖI CÚ PHÁP: Bỏ comment JS ---
     minWorldX, maxWorldX = float('inf'), float('-inf')
     minWorldY, maxWorldY = float('inf'), float('-inf')
     for p in points:
@@ -56,187 +92,290 @@ def getTileBoundingBox(points, zoom):
         maxWorldX = max(maxWorldX, worldP["x"])
         minWorldY = min(minWorldY, worldP["y"])
         maxWorldY = max(maxWorldY, worldP["y"])
-    worldBounds = {"minWorldX": minWorldX, "maxWorldX": maxWorldX, "minWorldY": minWorldY, "maxWorldY": maxWorldY}
-    minTileX = math.floor(worldBounds["minWorldX"] / TILE_SIZE)
-    maxTileX = math.floor(worldBounds["maxWorldX"] / TILE_SIZE)
-    minTileY = math.floor(worldBounds["minWorldY"] / TILE_SIZE)
-    maxTileY = math.floor(worldBounds["maxWorldY"] / TILE_SIZE)
-    tileBounds = {"minTileX": minTileX, "maxTileX": maxTileX, "minTileY": minTileY, "maxTileY": maxTileY}
-    return tileBounds
+    
+    return {
+        "minTileX": math.floor(minWorldX / TILE_SIZE),
+        "maxTileX": math.floor(maxWorldX / TILE_SIZE),
+        "minTileY": math.floor(minWorldY / TILE_SIZE),
+        "maxTileY": math.floor(maxWorldY / TILE_SIZE)
+    }
 
-def draw_rounded_rectangle(img, pt1, pt2, color, thickness, radius=1):
-    # --- SỬA LỖI CÚ PHÁP: Bỏ comment JS ---
-    x1, y1 = int(pt1[0]), int(pt1[1])
-    x2, y2 = int(pt2[0]), int(pt2[1])
-    if thickness == -1:
-        cv2.rectangle(img, (x1 + radius, y1), (x2 - radius, y2), color, -1)
-        cv2.rectangle(img, (x1, y1 + radius), (x2, y2 - radius), color, -1)
-        cv2.circle(img, (x1 + radius, y1 + radius), radius, color, -1)
-        cv2.circle(img, (x2 - radius, y1 + radius), radius, color, -1)
-        cv2.circle(img, (x1 + radius, y2 - radius), radius, color, -1)
-        cv2.circle(img, (x2 - radius, y2 - radius), radius, color, -1)
-    elif thickness > 0:
-        cv2.ellipse(img, (x1 + radius, y1 + radius), (radius, radius), 180, 0, 90, color, thickness)
-        cv2.ellipse(img, (x2 - radius, y1 + radius), (radius, radius), 270, 0, 90, color, thickness)
-        cv2.ellipse(img, (x1 + radius, y2 - radius), (radius, radius), 90, 0, 90, color, thickness)
-        cv2.ellipse(img, (x2 - radius, y2 - radius), (radius, radius), 0, 0, 90, color, thickness)
-        cv2.line(img, (x1 + radius, y1), (x2 - radius, y1), color, thickness)
-        cv2.line(img, (x1 + radius, y2), (x2 - radius, y2), color, thickness)
-        cv2.line(img, (x1, y1 + radius), (x1, y2 - radius), color, thickness)
-        cv2.line(img, (x2, y1 + radius), (x2, y2 - radius), color, thickness)
+def analyze_spatial_distribution(tree_list):
+    """
+    Phân tích không gian (K-NN):
+    - Crowded: Dựa vào cây gần nhất.
+    - Sparse: Dựa vào trung bình 3 cây gần nhất.
+    """
+    logger.info(">>> [Spatial] Starting SMART spatial analysis...")
+    n_trees = len(tree_list)
+    
+    if n_trees < 2:
+        if n_trees == 1: tree_list[0]['spacing_status'] = "SPARSE"
+        return tree_list, []
 
-# --- Tải Model (giữ nguyên) ---
+    centers = np.array([[t['center_x'], t['center_y']] for t in tree_list])
+    
+    # Ma trận khoảng cách
+    diff = centers[:, np.newaxis, :] - centers[np.newaxis, :, :]
+    dist_sq = np.sum(diff**2, axis=-1).astype(float) 
+    np.fill_diagonal(dist_sq, np.inf)
+    
+    dist_matrix_px = np.sqrt(dist_sq)
+    sorted_dists_px = np.sort(dist_matrix_px, axis=1)
+
+    warnings = []
+    k_neighbors = min(n_trees - 1, 3) 
+    
+    for i, tree in enumerate(tree_list):
+        gsd = tree['gsd_ref']
+        nearest_dist_m = sorted_dists_px[i, 0] * gsd
+        
+        closest_k_dists_px = sorted_dists_px[i, :k_neighbors]
+        avg_k_dist_m = np.mean(closest_k_dists_px) * gsd
+        
+        tree['nearest_neighbor_dist_m'] = round(nearest_dist_m, 2)
+        tree['avg_3_neighbor_dist_m'] = round(avg_k_dist_m, 2)
+        
+        if nearest_dist_m < AGRI_SPECS["SPACING_CROWDED_THRESHOLD_M"]:
+            tree['spacing_status'] = "CROWDED"
+        elif avg_k_dist_m > AGRI_SPECS["SPACING_SPARSE_THRESHOLD_M"]:
+            tree['spacing_status'] = "SPARSE"
+            # English Warning
+            warnings.append(f"Tree ID {tree['id']} (Gap Detected): Avg 3-neighbors distance is {avg_k_dist_m:.1f}m")
+        else:
+            tree['spacing_status'] = "OPTIMAL"
+            
+    return tree_list, warnings
+
+# --- Load Model ---
 use_cuda = torch.cuda.is_available()
 device = "cuda:0" if use_cuda else "cpu"
-logging.info(f"Device: {device} | CUDA: {torch.version.cuda if use_cuda else 'N/A'} | GPU: {torch.cuda.get_device_name(0) if use_cuda else 'N/A'}")
 detection_model = None
 try:
-    if not os.path.exists(MODEL_PATH): raise FileNotFoundError(f"Model not found: {MODEL_PATH}")
-    logging.info(f"⏳ Loading model from '{MODEL_PATH}' on '{device.upper()}'...")
-    detection_model = AutoDetectionModel.from_pretrained(model_type='yolov8', model_path=MODEL_PATH, confidence_threshold=SAHI_CONFIDENCE_THRESHOLD, device=device)
-    logging.info("✅ Model loaded successfully!")
+    if os.path.exists(MODEL_PATH):
+        logger.info(f"INIT: Loading model from '{MODEL_PATH}' on '{device}'...")
+        detection_model = AutoDetectionModel.from_pretrained(model_type='yolov8', model_path=MODEL_PATH, confidence_threshold=SAHI_CONFIDENCE_THRESHOLD, device=device)
+        logger.info("INIT: ✅ Model loaded successfully!")
+    else:
+        logger.error(f"INIT: ❌ Model not found at {MODEL_PATH}")
 except Exception as e:
-    logging.error(f"❌ Critical error loading model: {e}")
+    logger.error(f"INIT: ❌ Error loading model: {e}")
 
-# --- FastAPI App & Input Model (giữ nguyên) ---
-app = FastAPI( title="Palm Tree Detection API (Server Tile + Filter)", version="5.1.1") # Bump version
+# --- App ---
+app = FastAPI(title="Palm Tree Agri-Intelligence API", version="6.4.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
 class LatLng(BaseModel): latitude: float; longitude: float
-class PredictRequest(BaseModel): polygon: List[LatLng]; center: LatLng | None = None; area_m2: float | None = None; area_ha: float | None = None
+class PredictRequest(BaseModel): 
+    polygon: List[LatLng]
+    area_m2: float | None = None
+    area_ha: float | None = None
 
-@app.get("/")
-def read_root(): return {"message": "POST /predict with JSON polygon."}
-
-# --- ENDPOINT /PREDICT (giữ nguyên logic) ---
 @app.post("/predict")
 async def predict_from_polygon(data: PredictRequest = Body(...)):
-    if detection_model is None: raise HTTPException(status_code=503, detail="Error: Model not loaded.")
+    logger.info("="*50)
+    logger.info("NEW REQUEST RECEIVED: /predict")
+    
+    if detection_model is None: raise HTTPException(status_code=503, detail="Model not loaded.")
     try:
         polygon_latlng = [p.dict() for p in data.polygon]
         if len(polygon_latlng) < 3: raise HTTPException(status_code=400, detail="Invalid polygon")
-        logging.info(f"Processing polygon with {len(polygon_latlng)} points.")
 
-        # 1. Tính toán & Tải Tile
+        # 0. Calculate GIS & Area
+        avg_lat = sum(p["latitude"] for p in polygon_latlng) / len(polygon_latlng)
+        gsd = calculate_gsd(avg_lat, TARGET_ZOOM)
+        
+        if data.area_m2 is None:
+            area_m2 = calculate_polygon_area_m2(polygon_latlng)
+            area_ha = area_m2 / 10000.0
+        else:
+            area_m2 = data.area_m2
+            area_ha = data.area_ha if data.area_ha else area_m2 / 10000.0
+            
+        logger.info(f"1. GIS Info: Avg Lat={avg_lat:.5f}, GSD={gsd:.5f} m/px")
+
+        # 1. Tile Download & Stitching
         tileBounds = getTileBoundingBox(polygon_latlng, TARGET_ZOOM)
         minTileX, maxTileX = tileBounds["minTileX"], tileBounds["maxTileX"]
         minTileY, maxTileY = tileBounds["minTileY"], tileBounds["maxTileY"]
+        
         tiles_to_download = [(x, y) for x in range(minTileX, maxTileX + 1) for y in range(minTileY, maxTileY + 1)]
-        logging.info(f"Tiles to download: {len(tiles_to_download)}")
-        if len(tiles_to_download) > MAX_TILES: raise HTTPException(status_code=400, detail=f"Area too large ({len(tiles_to_download)} tiles). Max {MAX_TILES}.")
-        if not tiles_to_download: raise HTTPException(status_code=400, detail="No tiles found")
+        num_tiles = len(tiles_to_download)
+        
+        if num_tiles > MAX_TILES: 
+            raise HTTPException(status_code=400, detail=f"Area too large ({num_tiles} tiles). Max {MAX_TILES}.")
+        
         stitch_width = (maxTileX - minTileX + 1) * TILE_SIZE
         stitch_height = (maxTileY - minTileY + 1) * TILE_SIZE
         stitched_image = Image.new("RGBA", (stitch_width, stitch_height))
         stitchOriginWorldX = minTileX * TILE_SIZE
         stitchOriginWorldY = minTileY * TILE_SIZE
+        
         session = requests.Session()
-        logging.info("Downloading and stitching tiles...")
         for x, y in tiles_to_download:
             url = GOOGLE_TILE_URL_TEMPLATE.format(x=x, y=y, z=TARGET_ZOOM)
             try:
-                response = session.get(url, timeout=10); response.raise_for_status()
-                tile_image = Image.open(io.BytesIO(response.content)).convert("RGBA")
-                stitched_image.paste(tile_image, ((x - minTileX) * TILE_SIZE, (y - minTileY) * TILE_SIZE))
-            except requests.exceptions.RequestException as e:
-                logging.warning(f"Failed to download tile ({x},{y}): {e}. Filling black.")
-                draw = ImageDraw.Draw(stitched_image)
-                offsetX, offsetY = (x - minTileX) * TILE_SIZE, (y - minTileY) * TILE_SIZE
-                draw.rectangle([(offsetX, offsetY), (offsetX + TILE_SIZE, offsetY + TILE_SIZE)], fill=(0, 0, 0, 255))
-        logging.info("Stitching complete.")
+                response = session.get(url, timeout=5)
+                if response.status_code == 200:
+                    tile_image = Image.open(io.BytesIO(response.content)).convert("RGBA")
+                    stitched_image.paste(tile_image, ((x - minTileX) * TILE_SIZE, (y - minTileY) * TILE_SIZE))
+            except Exception: pass
 
-        # 2. Chuyển ảnh ghép sang NumPy RGB cho SAHI
-        stitched_image_rgb_pil = stitched_image.convert("RGB")
-        stitched_image_rgb_np = np.array(stitched_image_rgb_pil)
-        logging.info(f"Stitched image prepared for SAHI, shape: {stitched_image_rgb_np.shape}")
-
-        # 3. CHẠY SAHI TRÊN TOÀN BỘ ẢNH GHÉP
-        logging.info("Starting SAHI prediction on stitched image...")
+        # 2. Run SAHI
+        logger.info("4. AI Detection: Starting SAHI...")
+        stitched_image_rgb_np = np.array(stitched_image.convert("RGB"))
         result = get_sliced_prediction(
-            stitched_image_rgb_np,
-            detection_model,
+            stitched_image_rgb_np, detection_model,
             slice_height=SAHI_SLICE_HEIGHT, slice_width=SAHI_SLICE_WIDTH,
-            overlap_height_ratio=SAHI_OVERLAP_HEIGHT_RATIO,
-            overlap_width_ratio=SAHI_OVERLAP_WIDTH_RATIO
+            overlap_height_ratio=SAHI_OVERLAP_HEIGHT_RATIO, overlap_width_ratio=SAHI_OVERLAP_WIDTH_RATIO
         )
         all_predictions = result.object_prediction_list
-        logging.info(f"🌴 SAHI found {len(all_predictions)} total objects on stitched image.")
 
-        # 4. Tạo mặt nạ Polygon trên kích thước ảnh ghép
+        # 3. Masking
         polygon_px = []
         for p in polygon_latlng:
             worldP = latLngToWorldXY(p["latitude"], p["longitude"], TARGET_ZOOM)
-            x = worldP["x"] - stitchOriginWorldX
-            y = worldP["y"] - stitchOriginWorldY
-            polygon_px.append((x, y))
-
+            polygon_px.append((worldP["x"] - stitchOriginWorldX, worldP["y"] - stitchOriginWorldY))
+        
         mask_pil = Image.new("L", (stitch_width, stitch_height), 0)
         ImageDraw.Draw(mask_pil).polygon(polygon_px, outline=1, fill=1)
         mask_np = np.array(mask_pil)
 
-        # 5. LỌC CÁC DỰ ĐOÁN NẰM TRONG POLYGON MASK
-        filtered_predictions = []
+        # 4. Process Trees & GET LOCATION
+        final_tree_list = []
+        min_radius_m = float('inf')
+        max_radius_m = float('-inf')
+        tree_counter = 1
+
         for pred in all_predictions:
             box = pred.bbox
             center_x = int((box.minx + box.maxx) / 2)
             center_y = int((box.miny + box.maxy) / 2)
+
             if 0 <= center_y < mask_np.shape[0] and 0 <= center_x < mask_np.shape[1] and mask_np[center_y, center_x] > 0:
-                filtered_predictions.append({
-                    "class_id": pred.category.id,
-                    "class_name": pred.category.name,
+                wp = box.maxx - box.minx
+                hp = box.maxy - box.miny
+                radius_m = ((wp + hp) / 4.0) * gsd
+                canopy_area_m2 = math.pi * (radius_m ** 2)
+                
+                if radius_m < min_radius_m: min_radius_m = radius_m
+                if radius_m > max_radius_m: max_radius_m = radius_m
+
+                # --- Tính tọa độ GPS ---
+                abs_world_x = stitchOriginWorldX + center_x
+                abs_world_y = stitchOriginWorldY + center_y
+                gps_loc = worldXYToLatLng(abs_world_x, abs_world_y, TARGET_ZOOM)
+                # -----------------------
+
+                final_tree_list.append({
+                    "id": tree_counter,
+                    "location": {
+                        "latitude": round(gps_loc["latitude"], 7),
+                        "longitude": round(gps_loc["longitude"], 7)
+                    },
+                    "center_x": center_x,
+                    "center_y": center_y,
+                    "box_pixels_stitched": [int(box.minx), int(box.miny), int(box.maxx), int(box.maxy)],
                     "confidence": round(float(pred.score.value), 4),
-                    "box_pixels_stitched": [int(box.minx), int(box.miny), int(box.maxx), int(box.maxy)]
+                    "canopy_radius_m": round(radius_m, 2),
+                    "canopy_area_m2": round(canopy_area_m2, 2),
+                    "gsd_ref": gsd
                 })
-        logging.info(f"✅ Filtered down to {len(filtered_predictions)} objects inside the polygon.")
-        predicted_count = len(filtered_predictions)
+                tree_counter += 1
 
-        # 6. Cắt ảnh gốc (RGBA) theo bounding box của polygon để gửi về client
-        logging.info("Cropping original stitched image for client...")
+        predicted_count = len(final_tree_list)
+        if predicted_count == 0: 
+            min_radius_m = 0.0
+            max_radius_m = 0.0
+            
+        logger.info(f"5. Filtering: {predicted_count} trees detected.")
+
+        # 5. Spatial Analysis
+        final_tree_list, spatial_warnings = analyze_spatial_distribution(final_tree_list)
+
+        # 6. Agri-Intelligence (TRANSLATED TO ENGLISH)
+        current_density = (predicted_count / area_ha) if area_ha > 0 else 0
+        
+        recommendation_action = "MAINTAIN"
+        recommendation_msg = "Planting density is within the optimal range."
+        
+        if current_density < AGRI_SPECS["OPTIMAL_DENSITY_MIN"]:
+            missing = int((AGRI_SPECS["OPTIMAL_DENSITY_MIN"] * area_ha) - predicted_count)
+            recommendation_action = "PLANT_MORE"
+            recommendation_msg = f"Low density detected. You can plant approximately {missing} additional trees."
+        elif current_density > AGRI_SPECS["OPTIMAL_DENSITY_MAX"]:
+            excess = int(predicted_count - (AGRI_SPECS["OPTIMAL_DENSITY_MAX"] * area_ha))
+            recommendation_action = "THINNING"
+            recommendation_msg = f"High density detected. Consider thinning {excess} trees."
+
+        yield_forecast = {
+            "min_ton": round((predicted_count * AGRI_SPECS["YIELD_AVG_PER_TREE_KG"]) / 1000, 2),
+            "max_ton": round((predicted_count * AGRI_SPECS["YIELD_HIGH_PER_TREE_KG"]) / 1000, 2),
+        }
+
+        # 7. Image Processing
+        logger.info("7. Image: Generating Base64 overlay...")
         bbox_mask = mask_pil.getbbox()
-        if not bbox_mask: raise HTTPException(status_code=400, detail="Polygon outside tile area")
-        cropped_image_rgba = stitched_image.crop(bbox_mask)
+        if not bbox_mask: raise HTTPException(status_code=400, detail="Empty area")
+        cropped_rgba = stitched_image.crop(bbox_mask)
+        
+        buf_in = BytesIO()
+        cropped_rgba.convert("RGB").save(buf_in, format="JPEG", quality=90)
+        input_b64 = base64.b64encode(buf_in.getvalue()).decode('utf-8')
 
-        # Mã hóa ảnh cắt gốc (input) sang Base64 JPEG
-        input_image_rgb = cropped_image_rgba.convert("RGB")
-        buffered_input = BytesIO()
-        input_image_rgb.save(buffered_input, format="JPEG", quality=90)
-        input_image_base64 = base64.b64encode(buffered_input.getvalue()).decode('utf-8')
-
-        # 7. Vẽ overlay: Vẽ các box ĐÃ LỌC lên ảnh ĐÃ CẮT
-        image_overlay_bgra = cv2.cvtColor(np.array(cropped_image_rgba), cv2.COLOR_RGBA2BGRA)
+        overlay_bgra = cv2.cvtColor(np.array(cropped_rgba), cv2.COLOR_RGBA2BGRA)
         crop_origin_x, crop_origin_y = bbox_mask[0], bbox_mask[1]
 
-        for tree_data in filtered_predictions:
-            box_stitched = tree_data['box_pixels_stitched']
-            x_min = box_stitched[0] - crop_origin_x
-            y_min = box_stitched[1] - crop_origin_y
-            x_max = box_stitched[2] - crop_origin_x
-            y_max = box_stitched[3] - crop_origin_y
-            label = f"{tree_data['class_name']}"
-            color = (0, 125, 255); thickness = 2
-            font_scale = 0.6; font = cv2.FONT_HERSHEY_SIMPLEX
-            draw_rounded_rectangle(image_overlay_bgra, (x_min, y_min), (x_max, y_max), color, thickness, radius=20)
-            (text_width, text_height), _ = cv2.getTextSize(label, font, font_scale, thickness)
-            label_bg_ymin = max(y_min + text_height + 10, text_height + 10)
-            label_bg_xmin = max(x_min, 0)
-            draw_rounded_rectangle(image_overlay_bgra, (label_bg_xmin, label_bg_ymin - text_height - 10), (label_bg_xmin + text_width + 10, label_bg_ymin), color, -1, radius=5)
-            cv2.putText(image_overlay_bgra, label, (label_bg_xmin + 5, label_bg_ymin - 5), font, font_scale, (255, 255, 255), 1, cv2.LINE_AA)
+        for tree in final_tree_list:
+            box = tree['box_pixels_stitched']
+            x1, y1 = box[0] - crop_origin_x, box[1] - crop_origin_y
+            x2, y2 = box[2] - crop_origin_x, box[3] - crop_origin_y
+            
+            center_x_px = int((x1 + x2) / 2)
+            center_y_px = int((y1 + y2) / 2)
+            width_px = x2 - x1
+            height_px = y2 - y1
+            radius_px = int((width_px + height_px) / 4)
 
-        # 8. Mã hóa ảnh overlay (BGRA) sang Base64 JPEG
-        image_overlay_bgr_final = cv2.cvtColor(image_overlay_bgra, cv2.COLOR_BGRA2BGR)
-        is_success, buffer = cv2.imencode(".jpg", image_overlay_bgr_final, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not is_success: raise HTTPException(status_code=500, detail="Cannot encode overlay image.")
-        overlay_image_base64 = base64.b64encode(buffer).decode("utf-8")
-        logging.info("Overlay Base64 image created successfully.")
+            color = (0, 255, 0)
+            if tree.get('spacing_status') == 'CROWDED': color = (0, 0, 255)
+            elif tree.get('spacing_status') == 'SPARSE': color = (0, 215, 255)
+            
+            cv2.circle(overlay_bgra, (center_x_px, center_y_px), radius_px, color, 2)
+            
+            text_pos_x = center_x_px - 10
+            text_pos_y = center_y_px - radius_px - 5
+            cv2.putText(overlay_bgra, str(tree['id']), (text_pos_x, text_pos_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        # 9. Trả kết quả về app (Thêm input_image_base64)
+        final_bgr = cv2.cvtColor(overlay_bgra, cv2.COLOR_BGRA2BGR)
+        overlay_b64 = base64.b64encode(cv2.imencode(".jpg", final_bgr)[1]).decode("utf-8")
+
+        logger.info("✅ SUCCESS: Response ready.")
         return JSONResponse(content={
-            "predicted_count": predicted_count,
-            "input_image_base64": input_image_base64,
-            "overlay_image_base64": overlay_image_base64
+            "summary": {
+                "count": predicted_count,
+                "area_ha": round(area_ha, 4),
+                "density_per_ha": round(current_density, 2),
+                "radius_stats": {
+                    "min_m": round(min_radius_m, 2),
+                    "max_m": round(max_radius_m, 2)
+                }
+            },
+            "agri_intelligence": {
+                "action": recommendation_action,
+                "message": recommendation_msg,
+                "yield_forecast_ton": yield_forecast,
+                "spatial_warnings": spatial_warnings[:10]
+            },
+            "trees": final_tree_list,
+            "input_image_base64": input_b64,
+            "overlay_image_base64": overlay_b64
         })
 
-    except HTTPException as http_exc: raise http_exc
     except Exception as e:
-        logging.error(f"Critical error in /predict: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+        logger.error(f"❌ CRITICAL ERROR: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
