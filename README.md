@@ -1,8 +1,3 @@
-Here is the **English version** of the `README.md`, written in a professional, technical style suitable for a Deep Tech project.
-
-I have kept the **image placeholders** with specific instructions on which figures to use from your paper.
-
-```markdown
 # 🌴 Deep Palm: Satellite-Based Palm Tree Detection Server
 
 ![Project Banner](docs/images/banner_project.png)
@@ -191,7 +186,3 @@ Analyzes a user-defined polygon area and returns palm tree statistics.
 ## 📄 License
 
 This project is licensed under the MIT License.
-
-```
-
-```
