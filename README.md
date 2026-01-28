@@ -19,6 +19,13 @@
 * [cite_start]**Spatial Diagnosis:** Implements a "Traffic Light" system (Green/Yellow/Red) to visually identify overcrowding and optimal spacing[cite: 906].
 * [cite_start]**High Performance:** Built on **FastAPI** (Asynchronous) and containerized with **Docker** for scalable deployment[cite: 557, 567].
 
+
+---
+
+## 📊 Dataset at a Glance
+
+![Dataset Overview](docs/images/readme_dataset_overview.png)
+
 ---
 
 ## 🏗️ System Architecture
@@ -31,6 +38,61 @@ The system follows a modular end-to-end pipeline, from geospatial data acquisiti
 3.  [cite_start]**Inference:** YOLOv12 model scans individual slices (SAHI) to detect trees[cite: 562].
 4.  [cite_start]**Post-processing:** Merging detections, Soft-NMS (Non-Maximum Suppression), and Density Calculation[cite: 372].
 5.  [cite_start]**Output:** Returns JSON Statistics + Base64 Overlay Image[cite: 565].
+
+---
+
+## 🔬 Methodology
+
+### 1. Image Type Taxonomy and Stratified Handling
+
+To ensure robust generalization across heterogeneous landscapes, the collected RGB satellite tiles were categorized into representative *image types* based on plantation density, background context, and radiometric conditions. This taxonomy enables stratified sampling during training and targeted preprocessing/augmentation policies while maintaining a single unified detector.
+
+*   **Image Type A: Dense plantation tiles.** Regular grid patterns with frequent crown-to-crown proximity and overlapping shadows. Primary challenge: crowding and partial occlusion.
+*   **Image Type B: Sparse/desert-adjacent tiles.** Widely spaced palms embedded in sandy/rocky backgrounds with variable contrast. Primary challenge: small-object visibility and background confusion.
+*   **Image Type C: Mixed urban–agricultural tiles.** Palms co-exist with buildings, roads, irrigation circles, and man-made structures. Primary challenge: false positives on circular roofs/water structures.
+*   **Image Type D: Low-contrast/shadow/haze tiles.** Reduced visibility due to haze, long shadows, or low solar elevation. Primary challenge: blurred crown boundaries and missed detections.
+
+Rather than training separate models per type, the dataset was stratified across these categories to balance exposure during optimization. Type-specific preprocessing and augmentation were applied through region/type-aware scheduling while preserving consistent supervision signals.
+
+![Representative image-type taxonomy](docs/images/fig_type_taxonomy.png)
+*Representative image-type taxonomy used in this study: (A) dense plantations, (B) sparse/desert-adjacent, (C) mixed urban--agricultural, and (D) low-contrast/shadow/haze conditions.*
+
+### 2. Type-Aware Processing and Sampling Workflow
+
+Each tile was assigned an image-type tag during ingestion. The tag is used to (i) enforce stratified splits, (ii) adjust normalization and shadow/haze routines when required, and (iii) control augmentation probabilities (e.g., stronger mosaic/copy--paste in dense scenes and stronger photometric perturbations in low-contrast scenes). This procedure avoids geographic leakage and prevents performance inflation due to over-representation of visually easy tiles.
+
+![Type-aware workflow](docs/images/fig_type_workflow.png)
+*Type-aware workflow integrated into the pipeline: image-type tagging → stratified partitioning → type-aware preprocessing/augmentation → unified model training → SAHI inference.*
+
+### 3. Type-Specific Preprocessing and Augmentation
+
+| Image Type | Main Failure Mode | Emphasized Policy |
+| :--- | :--- | :--- |
+| **A: Dense plantation** | Occlusion, clustered crowns | Mosaic/Copy--Paste (early), Soft-NMS, SAHI overlap |
+| **B: Sparse/desert-adjacent** | Small objects, low contrast vs soil | Contrast normalization, mild HSV jitter, multiscale |
+| **C: Mixed urban--agri** | False positives on circular man-made objects | Hard-negative sampling, stricter label rules, context mosaic |
+| **D: Low-contrast/shadow/haze** | Missed detections, boundary blur | Shadow-aware adjustment, haze simulation, CLAHE-like boost |
+
+
+### 📝 Model & Dataset Cards
+
+#### Model Card
+*   **Architecture:** YOLOv12m (Medium) + SAHI (Slicing Aided Hyper Inference)
+*   **Input Resolution:** 640x640 (base), Slicing: 1280x1280 patches resized to 640.
+*   **Hyperparameters:**
+    *   Confidence Threshold: 0.4
+    *   IoU Threshold: 0.5
+    *   Slice Overlap: 0.2
+*   **Performance:** ~1.7s latency per tile on NVIDIA T4.
+*   **Limitations:** Performance may degrade in extreme haze or with circular non-palm structures (e.g., water tanks) in urban areas.
+
+#### Dataset Card
+*   **Regions:** Al-Ahsa, Qassim, Medina (Saudi Arabia).
+*   **Resolution (GSD):** 0.3m - 0.5m per pixel.
+*   **Labeling:** Bounding box annotations for palm crowns.
+*   **Splits:** Spatially disjoint splitting to prevent geographic leakage.
+    *   Train: 70% | Val: 20% | Test: 10%
+*   **Bias Mitigation:** Stratified sampling across Dense (A), Sparse (B), Urban (C), and Haze (D) categories.
 
 ---
 
@@ -96,7 +158,37 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app
 
 ---
 
-## 🐳 Docker Deployment (Recommended)
+## � Repository Structure
+
+```text
+├── app/                # Application source code
+├── tools/              # Training, evaluation, and inference scripts
+├── configs/            # Configuration files (YOLO, SAHI, types)
+├── docs/images/        # Documentation assets
+├── weights/            # Pre-trained models
+└── requirements.txt    # Python dependencies
+```
+
+## 🔁 Reproducibility
+
+To reproduce the results reported in this study, follow these steps:
+
+*   **Training:**
+    ```bash
+    python tools/train.py --config configs/exp_yolov12m.yaml --seed 42
+    ```
+*   **Evaluation:**
+    ```bash
+    python tools/eval.py --weights weights/best.pt --task val
+    ```
+*   **SAHI Inference:**
+    ```bash
+    python tools/infer_sahi.py --source data/test_images/ --config configs/sahi.yaml
+    ```
+
+---
+
+## �🐳 Docker Deployment (Recommended)
 
 To build and run the containerized application:
 
