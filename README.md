@@ -1,4 +1,4 @@
-# 🌴 Deep Palm: Satellite-Based Palm Tree Detection Server
+# AI-Driven Date Palm Detection and Management Using High-Resolution Satellite Imagery with YOLOv12
 
 ![Project Banner](docs/images/banner_project.png)
 
