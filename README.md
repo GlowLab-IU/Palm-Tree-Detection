@@ -1,8 +1,5 @@
-
- 
-</div>
 <div align="center">
-  <img src="https://capsule-render.vercel.app/api?type=waving&color=009933&height=300&section=header&text=Date%20Palm%20Detection%20YOLOv12&fontSize=40&animation=fadeIn&fontAlignY=38&desc=Satellite%20Imagery%20Analysis&descAlignY=51&descAlign=62" />
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=009933&height=300&section=header&text=AI-Driven%20Date%20Palm%20Detection&desc=Management%20Using%20High-Resolution%20Satellite%20Imagery%20with%20YOLOv12&fontSize=35&descSize=20&animation=fadeIn&fontAlignY=35&descAlignY=55" />
 </div>
 
 
