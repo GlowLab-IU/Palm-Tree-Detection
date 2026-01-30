@@ -4,12 +4,6 @@
 <div align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=009933&height=300&section=header&text=Date%20Palm%20Detection%20YOLOv12&fontSize=40&animation=fadeIn&fontAlignY=38&desc=Satellite%20Imagery%20Analysis&descAlignY=51&descAlign=62" />
 </div>
- <p align="center">
-    <img src="https://img.shields.io/badge/YOLO-v12-blue?style=for-the-badge&logo=ultralytics" />
-    <img src="https://img.shields.io/badge/Python-3.9+-yellow?style=for-the-badge&logo=python&logoColor=white" />
-    <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" />
-    <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
-  </p>
 
 
 ![Project Banner](docs/images/banner_project.png)
