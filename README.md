@@ -154,56 +154,7 @@ Core use cases include: **Define Analysis Area**, **Request Analysis**, and **Vi
 *   **Backend API:** **Python 3.10+** using **FastAPI**. Orchestrates GIS retrieval, SAHI inference, and OpenCV post-processing.
 *   **Hardware:** Automatic CUDA acceleration with CPU fallback.
 
----
 
-## 📊 Experimental Results
-
-### 1. Model Performance on Non-Augmented Dataset
-
-A baseline established by training on the original dataset showed high precision but limited recall and localization accuracy (mAP@0.50:0.95).
-
-| Model | Params (M) | Precision | Recall | mAP@0.50 | mAP@0.50:0.95 |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| YOLOv10m | 127 | 0.913 | 0.863 | 0.918 | 0.587 |
-| YOLOv11m | 150 | **0.966** | 0.849 | 0.929 | 0.589 |
-| YOLOv12m | 142 | 0.961 | 0.820 | 0.918 | **0.590** |
-| RT-DETR | 77 | 0.812 | 0.757 | 0.764 | 0.470 |
-
-![Comparative Non-Augmented](docs/images/fig10_comparative.png)
-*Figure 9: Comparative performance metrics for models trained on the non-augmented dataset.*
-
-### 2. Model Performance on Augmented Dataset
-
-Retraining on the augmented dataset yielded substantial improvements, particularly for YOLOv12m.
-
-| Model | Params (M) | Precision | Recall | mAP@0.50 | mAP@0.50:0.95 |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| YOLOv10m (Aug.) | 127 | 0.962 | 0.945 | 0.987 | 0.673 |
-| YOLOv11m (Aug.) | 150 | 0.963 | 0.950 | 0.987 | 0.676 |
-| **YOLOv12m (Aug.)** | 142 | 0.959 | **0.956** | **0.988** | **0.678** |
-| RT-DETR (Aug.) | 77 | 0.956 | 0.947 | 0.980 | 0.626 |
-
-![Comparative Augmented](docs/images/fig11_comparative2.png)
-*Figure 10: Comparative performance metrics for models trained on the augmented dataset.*
-
-### 3. Comparison with State-of-the-Art
-
-The proposed **YOLOv12m (Augmented)** model achieves state-of-the-art performance, even when compared to UAV-based studies which typically have higher resolution data.
-
-| Study | Model | Image Type | mAP@0.50 | mAP@0.50:0.95 |
-| :--- | :--- | :--- | :---: | :---: |
-| **Proposed Study** | **YOLOv12m (Aug.)** | **Satellite** | **0.988** | **0.678** |
-| Farhan et al. (2025) | YOLOv8n | UAV | 0.980 | - |
-| Al-Saad et al. (2025) | YOLOv5s | UAV | 0.966 | - |
-| Lim Bing Sern et al. (2025) | YOLOv9 | UAV | 0.726 | 0.502 |
-
-![Consolidated Performance](docs/images/fig12_consolidatedperformance.png)
-*Figure 11: Consolidated performance comparison across all models.*
-
-![Training Loss Curves](docs/images/fig13_traininglosscurves.png)
-*Figure 12: Training loss curves illustrating stable convergence.*
-
----
 
 ## 📱 Mobile Application Workflow
 
