@@ -1,7 +1,31 @@
 <h1 align="center">
   AI-Driven Date Palm Detection and Management Using High-Resolution Satellite Imagery with YOLOv12
 </h1>
+<div align="center">
+  <img src="https://img.icons8.com/external-flaticons-lineal-color-flat-icons/64/external-satellite-technology-flaticons-lineal-color-flat-icons.png" width="100" />
 
+  <h1 align="center">AI-Driven Date Palm Detection</h1>
+  
+  <h3 align="center">
+    Management Using High-Resolution Satellite Imagery with YOLOv12
+  </h3>
+
+  <p align="center">
+    <img src="https://img.shields.io/badge/YOLO-v12-blue?style=for-the-badge&logo=ultralytics" />
+    <img src="https://img.shields.io/badge/Python-3.9+-yellow?style=for-the-badge&logo=python&logoColor=white" />
+    <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white" />
+    <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" />
+  </p>
+</div>
+<div align="center">
+  <img src="https://capsule-render.vercel.app/api?type=waving&color=009933&height=300&section=header&text=Date%20Palm%20Detection%20YOLOv12&fontSize=40&animation=fadeIn&fontAlignY=38&desc=Satellite%20Imagery%20Analysis&descAlignY=51&descAlign=62" />
+</div>
+
+<div align="center">
+  <a href="https://git.io/typing-svg">
+    <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=600&size=30&duration=4000&pause=1000&color=2E9104&center=true&vCenter=true&width=900&lines=AI-Driven+Date+Palm+Detection;Using+High-Resolution+Satellite+Imagery;Powered+by+YOLOv12+🚀" alt="Typing SVG" />
+  </a>
+</div>
 ![Project Banner](docs/images/banner_project.png)
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
